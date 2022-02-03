@@ -1,0 +1,16 @@
+domain: demo
+layout:
+- go.kubebuilder.io/v3
+projectName: demo-operator
+repo: operator-demo
+resources:
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: demo
+  group: demo
+  kind: DemoVolume
+  path: operator-demo/api/v1
+  version: v1
+version: "3"
