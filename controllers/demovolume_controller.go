@@ -18,6 +18,13 @@ package controllers
 
 import (
 	"context"
+	"fmt"
+	"github.com/go-logr/logr"
+	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -47,11 +54,70 @@ type DemoVolumeReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.11.0/pkg/reconcile
 func (r *DemoVolumeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = log.FromContext(ctx)
+	l := log.FromContext(ctx)
+	l.Info("Enter Reconsile", "req", req)
 
-	// TODO(user): your logic here
+	volume := &demov1.DemoVolume{}
+	err := r.Get(ctx, types.NamespacedName{Name: req.Name, Namespace: req.Namespace}, volume)
+
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	l.Info("Enter Reconsile", "spec", volume.Spec, "status", volume.Status)
+
+	if volume.Spec.Name != volume.Status.Name {
+		volume.Status.Name = volume.Spec.Name
+		err := r.Status().Update(ctx, volume)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
+	err = r.reconsilePVC(ctx, volume, l)
+
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 
 	return ctrl.Result{}, nil
+}
+
+func (r *DemoVolumeReconciler) reconsilePVC(ctx context.Context, volume *demov1.DemoVolume, l logr.Logger) error {
+	pvc := &v1.PersistentVolumeClaim{}
+	err := r.Get(ctx, types.NamespacedName{Name: volume.Name, Namespace: volume.Namespace}, pvc)
+
+	if err == nil {
+		l.Info("PVC found")
+		return nil
+	}
+
+	if errors.IsNotFound(err) {
+		return err
+	}
+
+	l.Info("PVC not found")
+
+	storageClass := "demo-volume"
+	storageRequest, _ := resource.ParseQuantity(fmt.Sprintf("%dGi", volume.Spec.Size))
+
+	pvc = &v1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: volume.Namespace,
+			Name:      volume.Name,
+		},
+		Spec: v1.PersistentVolumeClaimSpec{
+			StorageClassName: &storageClass,
+			AccessModes:      []v1.PersistentVolumeAccessMode{"RewriteOnce"},
+			Resources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{"storage": storageRequest},
+			},
+		},
+	}
+
+	l.Info("Creating PVC")
+
+	return r.Create(ctx, pvc)
 }
 
 // SetupWithManager sets up the controller with the Manager.
